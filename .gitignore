@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# data & model artifacts
+data/raw/*
+data/processed/*
+checkpoints/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!checkpoints/.gitkeep
+
+.env
+
+.vscode/
+.idea/
+
+# AI context
+CONTEXT.md

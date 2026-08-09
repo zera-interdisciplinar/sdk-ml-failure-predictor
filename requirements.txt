@@ -1,0 +1,23 @@
+# Core ML
+torch>=2.2
+
+# Data handling
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.4
+
+# Schema validation & config
+pydantic>=2.6
+PyYAML>=6.0
+
+# Synthetic data generation
+Faker>=24.0
+
+# Serving (MCP)
+mcp>=1.0
+
+# Utilities
+tqdm>=4.66
+
+# Testing
+pytest>=8.0
