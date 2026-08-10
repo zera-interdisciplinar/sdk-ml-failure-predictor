@@ -19,3 +19,5 @@ checkpoints/*
 
 # AI context
 CONTEXT.md
+
+scripts/
