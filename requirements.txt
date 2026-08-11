@@ -6,6 +6,9 @@ numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.4
 
+# Visualization
+matplotlib>=3.8
+
 # Schema validation & config
 pydantic>=2.6
 PyYAML>=6.0
