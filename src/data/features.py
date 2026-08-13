@@ -1,12 +1,24 @@
 import json
 from pathlib import Path
+from typing import Any, TypedDict
 
 from src.data.schema import DeviceRecord
 
-CATEGORICAL_COLUMNS = ["category", "manufacturer", "model", "climateZone"]
-NUMERIC_COLUMNS = ["usageIntensity", "ageAtAcquisitionMonths"]
+CATEGORICAL_COLUMNS: list[str] = ["category", "manufacturer", "model", "climateZone"]
+NUMERIC_COLUMNS: list[str] = ["usageIntensity", "ageAtAcquisitionMonths"]
 
-UNK_TOKEN = "<UNK>"
+UNK_TOKEN: str = "<UNK>"
+
+
+class EncodedRecord(TypedDict):
+    categorical: dict[str, int]
+    numeric: list[float]
+
+
+class EncoderState(TypedDict):
+    vocabs: dict[str, dict[str, int]]
+    numeric_mean: dict[str, float]
+    numeric_std: dict[str, float]
 
 
 def age_at_acquisition_months(record: DeviceRecord) -> float:
@@ -35,7 +47,7 @@ class FeatureEncoder:
 
     def fit(self, records: list[DeviceRecord]) -> None:
         for col in CATEGORICAL_COLUMNS:
-            values = sorted({getattr(r, col) for r in records})
+            values: list[str] = sorted({str(getattr(r, col)) for r in records})
             self.vocabs[col] = {UNK_TOKEN: 0, **{v: i + 1 for i, v in enumerate(values)}}
 
         numeric_values: dict[str, list[float]] = {col: [] for col in NUMERIC_COLUMNS}
@@ -43,11 +55,11 @@ class FeatureEncoder:
             numeric_values["usageIntensity"].append(r.usageIntensity)
             numeric_values["ageAtAcquisitionMonths"].append(age_at_acquisition_months(r))
 
-        for col, values in numeric_values.items():
-            mean = sum(values) / len(values)
-            variance = sum((v - mean) ** 2 for v in values) / len(values)
-            self.numeric_mean[col] = mean
-            self.numeric_std[col] = variance**0.5 or 1.0
+        for numeric_col, numeric_col_values in numeric_values.items():
+            mean: float = sum(numeric_col_values) / len(numeric_col_values)
+            variance: float = sum((v - mean) ** 2 for v in numeric_col_values) / len(numeric_col_values)
+            self.numeric_mean[numeric_col] = mean
+            self.numeric_std[numeric_col] = variance**0.5 or 1.0
 
     def encode_categorical(self, record: DeviceRecord) -> dict[str, int]:
         return {
@@ -56,13 +68,13 @@ class FeatureEncoder:
         }
 
     def encode_numeric(self, record: DeviceRecord) -> list[float]:
-        raw = {
-            "usageIntensity": record.usageIntensity,
+        raw: dict[str, float] = {
+            "usageIntensity": float(record.usageIntensity),
             "ageAtAcquisitionMonths": age_at_acquisition_months(record),
         }
         return [(raw[col] - self.numeric_mean[col]) / self.numeric_std[col] for col in NUMERIC_COLUMNS]
 
-    def transform(self, record: DeviceRecord) -> dict:
+    def transform(self, record: DeviceRecord) -> EncodedRecord:
         return {
             "categorical": self.encode_categorical(record),
             "numeric": self.encode_numeric(record),
@@ -72,7 +84,7 @@ class FeatureEncoder:
         return len(self.vocabs[col])
 
     def save(self, path: str | Path) -> None:
-        payload = {
+        payload: EncoderState = {
             "vocabs": self.vocabs,
             "numeric_mean": self.numeric_mean,
             "numeric_std": self.numeric_std,
@@ -81,8 +93,8 @@ class FeatureEncoder:
 
     @classmethod
     def load(cls, path: str | Path) -> "FeatureEncoder":
-        payload = json.loads(Path(path).read_text())
-        encoder = cls()
+        payload: EncoderState = json.loads(Path(path).read_text())
+        encoder: "FeatureEncoder" = cls()
         encoder.vocabs = payload["vocabs"]
         encoder.numeric_mean = payload["numeric_mean"]
         encoder.numeric_std = payload["numeric_std"]
@@ -90,5 +102,5 @@ class FeatureEncoder:
 
 
 def load_records(path: str | Path) -> list[DeviceRecord]:
-    raw = json.loads(Path(path).read_text())
+    raw: list[dict[str, Any]] = json.loads(Path(path).read_text())
     return [DeviceRecord.model_validate(r) for r in raw]

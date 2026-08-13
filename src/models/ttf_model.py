@@ -13,14 +13,14 @@ class TTFModel(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.embeddings = nn.ModuleDict(
+        self.embeddings: nn.ModuleDict = nn.ModuleDict(
             {
                 col: nn.Embedding(vocab_sizes[col], embedding_dims[col])
                 for col in CATEGORICAL_COLUMNS
             }
         )
 
-        input_dim = sum(embedding_dims[col] for col in CATEGORICAL_COLUMNS) + len(NUMERIC_COLUMNS)
+        input_dim: int = sum(embedding_dims[col] for col in CATEGORICAL_COLUMNS) + len(NUMERIC_COLUMNS)
 
         layers: list[nn.Module] = []
         for hidden_dim in hidden_layers:
@@ -29,11 +29,11 @@ class TTFModel(nn.Module):
             input_dim = hidden_dim
         layers.append(nn.Linear(input_dim, 1))
 
-        self.mlp = nn.Sequential(*layers)
+        self.mlp: nn.Sequential = nn.Sequential(*layers)
 
     def forward(self, categorical: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        embedded = [
+        embedded: list[torch.Tensor] = [
             self.embeddings[col](categorical[:, i]) for i, col in enumerate(CATEGORICAL_COLUMNS)
         ]
-        features = torch.cat(embedded + [numeric], dim=1)
+        features: torch.Tensor = torch.cat(embedded + [numeric], dim=1)
         return self.mlp(features).squeeze(1)
