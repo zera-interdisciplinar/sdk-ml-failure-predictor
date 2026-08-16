@@ -1,0 +1,64 @@
+name: Deploy Production
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+env:
+  REGISTRY: us-central1-docker.pkg.dev
+  IMAGE: us-central1-docker.pkg.dev/zera1405/repo/ml-failure-predictor
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/537842934721/locations/global/workloadIdentityPools/zera-pool/providers/github-provider
+          service_account: github-actions-deploy@zera1405.iam.gserviceaccount.com
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: autopilot-cluster-1
+          location: us-central1
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and Push Docker Image
+        id: build
+        run: |
+          docker build \
+            --tag ${{ env.IMAGE }}:${{ github.ref_name }} \
+            --tag ${{ env.IMAGE }}:latest \
+            .
+
+          docker push ${{ env.IMAGE }}:${{ github.ref_name }}
+          docker push ${{ env.IMAGE }}:latest
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ env.IMAGE }}:${{ github.ref_name }})
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to GKE
+        run: |
+          sed -i "s|IMAGE_TAG|${{ env.IMAGE }}:${{ github.ref_name }}|g" k8s/deployment.yaml
+          kubectl apply -f k8s/deployment.yaml -n production
+          kubectl apply -f k8s/service.yaml -n production
+          kubectl rollout status deployment/ml-failure-predictor -n production --timeout=120s
+
+      - name: Annotate Deployment
+        run: |
+          kubectl annotate deployment ml-failure-predictor \
+            -n production \
+            kubernetes.io/change-cause="Release ${{ github.ref_name }} — commit ${{ github.sha }}" \
+            --overwrite
