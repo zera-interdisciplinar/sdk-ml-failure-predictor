@@ -16,6 +16,7 @@ from src.data.schema import DeviceRecord
 from src.models.ttf_model import TTFModel
 
 CONFIG_PATH: Path = Path(__file__).parent / "config.yaml"
+TOLERANCE_MONTHS: float = 3.0
 
 
 def split_records(
@@ -56,6 +57,46 @@ def run_epoch(
             total_loss += loss.item() * len(target)
 
     return total_loss / len(loader.dataset)
+
+
+PERCENTILES: list[float] = [0.50, 0.75, 0.90, 0.99]
+
+
+def compute_metrics(
+    model: TTFModel, loader: DataLoader, tolerance_months: float
+) -> dict[str, float]:
+    model.eval()
+
+    total_abs_error: float = 0.0
+    total_sq_error: float = 0.0
+    correct: int = 0
+    total: int = 0
+    abs_errors: list[torch.Tensor] = []
+
+    with torch.no_grad():
+        for categorical, numeric, target in loader:
+            pred: torch.Tensor = model(categorical, numeric)
+            errors: torch.Tensor = pred - target
+            abs_error: torch.Tensor = errors.abs()
+
+            total_abs_error += abs_error.sum().item()
+            total_sq_error += (errors**2).sum().item()
+            correct += (abs_error <= tolerance_months).sum().item()
+            total += len(target)
+            abs_errors.append(abs_error)
+
+    all_abs_errors: torch.Tensor = torch.cat(abs_errors)
+    quantiles: torch.Tensor = torch.quantile(all_abs_errors, torch.tensor(PERCENTILES))
+
+    metrics: dict[str, float] = {
+        "mae": total_abs_error / total,
+        "rmse": (total_sq_error / total) ** 0.5,
+        "accuracy": correct / total,
+    }
+    for percentile, value in zip(PERCENTILES, quantiles.tolist()):
+        metrics[f"p{int(percentile * 100)}"] = value
+
+    return metrics
 
 
 def plot_loss_curve(train_losses: list[float], val_losses: list[float], out_path: Path) -> None:
@@ -127,6 +168,23 @@ def main() -> None:
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         print(f"epoch {epoch:03d} | treino: {train_loss:.2f} | validação: {val_loss:.2f}")
+
+    train_metrics: dict[str, float] = compute_metrics(model, train_loader, TOLERANCE_MONTHS)
+    val_metrics: dict[str, float] = compute_metrics(model, val_loader, TOLERANCE_MONTHS)
+
+    def format_metrics(label: str, metrics: dict[str, float]) -> str:
+        percentiles: str = " | ".join(
+            f"p{int(p * 100)}: {metrics[f'p{int(p * 100)}']:.2f}" for p in PERCENTILES
+        )
+        return (
+            f"{label} -> MAE: {metrics['mae']:.2f} meses | "
+            f"RMSE: {metrics['rmse']:.2f} | "
+            f"acurácia (±{TOLERANCE_MONTHS:.0f} meses): {metrics['accuracy'] * 100:.1f}% | "
+            f"{percentiles}"
+        )
+
+    print(format_metrics("treino    ", train_metrics))
+    print(format_metrics("validação ", val_metrics))
 
     checkpoint_path: Path = Path(config["model"]["checkpoint_path"])
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

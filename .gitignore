@@ -7,10 +7,8 @@ venv/
 # data & model artifacts
 data/raw/*
 data/processed/*
-checkpoints/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-!checkpoints/.gitkeep
 
 .env
 

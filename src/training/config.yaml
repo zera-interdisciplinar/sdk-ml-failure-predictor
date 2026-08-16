@@ -2,7 +2,7 @@ data:
   raw_path: data/raw/devices.json
   encoder_path: checkpoints/feature_encoder.json
   val_split: 0.2
-  seed: 42
+  seed: 2026
 
 model:
   embedding_dims:
@@ -15,5 +15,5 @@ model:
 
 training:
   batch_size: 64
-  epochs: 50
+  epochs: 150
   learning_rate: 0.001
