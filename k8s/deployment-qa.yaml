@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-failure-predictor
+  namespace: qa
+  labels:
+    app: ml-failure-predictor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-failure-predictor
+  template:
+    metadata:
+      labels:
+        app: ml-failure-predictor
+    spec:
+      containers:
+        - name: ml-failure-predictor
+          image: IMAGE_TAG
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MCP_HTTP_PORT
+              value: "8000"
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi

@@ -1,0 +1,19 @@
+data:
+  raw_path: data/raw/devices.json
+  encoder_path: checkpoints/feature_encoder.json
+  val_split: 0.2
+  seed: 2026
+
+model:
+  embedding_dims:
+    category: 3
+    manufacturer: 5
+    model: 12
+    climateZone: 3
+  hidden_layers: [64, 32]
+  checkpoint_path: checkpoints/ttf_model.pt
+
+training:
+  batch_size: 64
+  epochs: 150
+  learning_rate: 0.001
