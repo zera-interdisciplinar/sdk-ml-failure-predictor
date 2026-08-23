@@ -2,6 +2,7 @@ import os
 
 from mcp.server import MCPServer
 
+from src.data.features import UNK_TOKEN
 from src.serving.inference import TTFPredictor
 from src.serving.schema import PredictionRequest
 
@@ -31,6 +32,44 @@ def predict_time_to_failure(request: PredictionRequest) -> float:
         a statistical estimate, not a guarantee.
     """
     return predictor.predict(request.model_dump(mode="json"))
+
+
+@mcp.tool()
+def list_valid_categories() -> list[str]:
+    """Lists the device categories the model was trained on.
+
+    Call this before predict_time_to_failure if you need to validate or
+    suggest a `category` value up front, e.g. to build a picklist or
+    reject typos before making a prediction request.
+
+    Returns:
+        The known category values, sorted alphabetically. A `category`
+        outside this list is not rejected by predict_time_to_failure —
+        it is treated as an unknown category, which typically makes the
+        prediction less accurate. This list can grow over time as the
+        model is retrained on new data, so callers should fetch it at
+        runtime rather than hardcoding a copy.
+    """
+    return sorted(v for v in predictor.encoder.vocabs["category"] if v != UNK_TOKEN)
+
+
+@mcp.tool()
+def list_valid_climate_zones() -> list[str]:
+    """Lists the climate zones the model was trained on.
+
+    Call this before predict_time_to_failure if you need to validate or
+    suggest a `climateZone` value up front, e.g. to build a picklist or
+    reject typos before making a prediction request.
+
+    Returns:
+        The known climate zone values, sorted alphabetically. A
+        `climateZone` outside this list is not rejected by
+        predict_time_to_failure — it is treated as an unknown zone, which
+        typically makes the prediction less accurate. This list can grow
+        over time as the model is retrained on new data, so callers
+        should fetch it at runtime rather than hardcoding a copy.
+    """
+    return sorted(v for v in predictor.encoder.vocabs["climateZone"] if v != UNK_TOKEN)
 
 
 if __name__ == "__main__":
