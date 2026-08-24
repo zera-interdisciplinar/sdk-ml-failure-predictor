@@ -18,3 +18,11 @@ class PredictionRequest(BaseModel):
     usageIntensity: int = Field(description="How intensively the device is used, on the dataset's original scale.")
     manufacturingDate: int = Field(description="Year the device was manufactured, e.g. 2021.")
     acquiredAt: date = Field(description="Date the device was acquired/put into service, ISO format (YYYY-MM-DD).")
+
+
+class PredictionError(BaseModel):
+    """One item's failure in a batch prediction, returned in place of a
+    float at that item's position so a single bad item doesn't discard the
+    valid predictions around it."""
+
+    error: str = Field(description="Human-readable reason this item could not be predicted, e.g. a missing or mistyped field.")

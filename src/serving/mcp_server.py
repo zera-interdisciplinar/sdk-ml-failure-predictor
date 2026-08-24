@@ -1,10 +1,13 @@
 import os
 
+from typing import Any
+
 from mcp.server import MCPServer
+from pydantic import ValidationError
 
 from src.data.features import UNK_TOKEN
 from src.serving.inference import TTFPredictor
-from src.serving.schema import PredictionRequest
+from src.serving.schema import PredictionError, PredictionRequest
 
 mcp: MCPServer = MCPServer("ttf-failure-predictor")
 predictor: TTFPredictor = TTFPredictor()
@@ -32,6 +35,60 @@ def predict_time_to_failure(request: PredictionRequest) -> float:
         a statistical estimate, not a guarantee.
     """
     return predictor.predict(request.model_dump(mode="json"))
+
+
+@mcp.tool()
+def predict_time_to_failure_batch(requests: list[dict[str, Any]]) -> list[float | PredictionError]:
+    """Predicts time-to-failure for many devices in a single call.
+
+    Use this instead of calling predict_time_to_failure in a loop whenever
+    you have more than one device to estimate — e.g. bulk decommission
+    planning, or scoring a fleet of devices at once. All items are run
+    through the model as one batch (a single forward pass), so this is
+    substantially cheaper per-item than N separate calls to
+    predict_time_to_failure, especially for large lists (hundreds of
+    devices): predict_time_to_failure alone is dominated by per-call
+    network/session overhead (roughly constant regardless of device count),
+    while the batched forward pass itself barely grows with N. There is no
+    hardcoded cap on how many items a single call accepts; the practical
+    limit is your own client/gateway timeout, not this server.
+
+    Each item is validated independently. An invalid item (missing or
+    mistyped field) does NOT fail the whole call — it does not stop the
+    other items from being predicted.
+
+    Args:
+        requests: The devices to predict for, in the same shape as
+            predict_time_to_failure's `request` argument (category,
+            manufacturer, model, climateZone, usageIntensity,
+            manufacturingDate, acquiredAt). See PredictionRequest for
+            field-level descriptions.
+
+    Returns:
+        One result per input item, in the same order as `requests` (the
+        result at index i corresponds to requests[i]). Each result is
+        either a float (the predicted months remaining until failure,
+        same semantics as predict_time_to_failure's return value) or a
+        PredictionError `{"error": "..."}` for the items that failed
+        validation.
+    """
+    records: dict[int, dict[str, Any]] = {}
+    results: list[float | PredictionError] = [PredictionError(error="not processed") for _ in requests]
+
+    for i, raw in enumerate(requests):
+        try:
+            validated: PredictionRequest = PredictionRequest.model_validate(raw)
+        except ValidationError as exc:
+            results[i] = PredictionError(error=str(exc))
+            continue
+        records[i] = validated.model_dump(mode="json")
+
+    if records:
+        predictions: list[float] = predictor.predict_batch(list(records.values()))
+        for i, prediction in zip(records.keys(), predictions):
+            results[i] = prediction
+
+    return results
 
 
 @mcp.tool()
