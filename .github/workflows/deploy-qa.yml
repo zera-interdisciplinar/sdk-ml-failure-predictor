@@ -6,8 +6,8 @@ on:
       - qa
 
 env:
-  REGISTRY: us-central1-docker.pkg.dev
-  IMAGE: us-central1-docker.pkg.dev/zera1405/repo/ml-failure-predictor
+  REGISTRY: southamerica-east1-docker.pkg.dev
+  IMAGE: southamerica-east1-docker.pkg.dev/zera-506513/repo/ml-failure-predictor
 
 jobs:
   deploy:
@@ -25,13 +25,13 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/537842934721/locations/global/workloadIdentityPools/zera-pool/providers/github-provider
-          service_account: github-actions-deploy@zera1405.iam.gserviceaccount.com
+          workload_identity_provider: projects/203414779599/locations/global/workloadIdentityPools/zera-pool/providers/github-provider
+          service_account: github-actions-deploy@zera-506513.iam.gserviceaccount.com
 
       - uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: autopilot-cluster-1
-          location: us-central1
+          cluster_name: zera
+          location: southamerica-east1
 
       - name: Configure Docker
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
