@@ -30,15 +30,23 @@ class TTFPredictor:
         self.model.eval()
 
     def predict(self, payload: dict[str, Any]) -> float:
-        record: DeviceRecord = DeviceRecord.model_validate(payload)
-        encoded: EncodedRecord = self.encoder.transform(record)
+        return self.predict_batch([payload])[0]
+
+    def predict_batch(self, payloads: list[dict[str, Any]]) -> list[float]:
+        """Runs every payload through the model as a single batched forward
+        pass (one tensor with N rows), instead of N separate forward passes —
+        the cost of a forward pass barely grows with N, so batching many
+        devices together is far cheaper per-item than calling predict() N
+        times."""
+        records: list[DeviceRecord] = [DeviceRecord.model_validate(p) for p in payloads]
+        encoded: list[EncodedRecord] = [self.encoder.transform(r) for r in records]
 
         categorical: torch.Tensor = torch.tensor(
-            [[encoded["categorical"][col] for col in CATEGORICAL_COLUMNS]], dtype=torch.long
+            [[enc["categorical"][col] for col in CATEGORICAL_COLUMNS] for enc in encoded], dtype=torch.long
         )
-        numeric: torch.Tensor = torch.tensor([encoded["numeric"]], dtype=torch.float32)
+        numeric: torch.Tensor = torch.tensor([enc["numeric"] for enc in encoded], dtype=torch.float32)
 
         with torch.no_grad():
-            prediction: torch.Tensor = self.model(categorical, numeric)
+            predictions: torch.Tensor = self.model(categorical, numeric)
 
-        return prediction.item()
+        return predictions.tolist()
