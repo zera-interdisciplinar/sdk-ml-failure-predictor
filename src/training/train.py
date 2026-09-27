@@ -69,6 +69,7 @@ def compute_metrics(
 
     total_abs_error: float = 0.0
     total_sq_error: float = 0.0
+    total_ape: float = 0.0
     correct: int = 0
     total: int = 0
     abs_errors: list[torch.Tensor] = []
@@ -81,6 +82,7 @@ def compute_metrics(
 
             total_abs_error += abs_error.sum().item()
             total_sq_error += (errors**2).sum().item()
+            total_ape += (abs_error / target.abs().clamp(min=1e-6)).sum().item()
             correct += (abs_error <= tolerance_months).sum().item()
             total += len(target)
             abs_errors.append(abs_error)
@@ -91,6 +93,7 @@ def compute_metrics(
     metrics: dict[str, float] = {
         "mae": total_abs_error / total,
         "rmse": (total_sq_error / total) ** 0.5,
+        "mape": total_ape / total * 100,
         "accuracy": correct / total,
     }
     for percentile, value in zip(PERCENTILES, quantiles.tolist()):
@@ -109,6 +112,88 @@ def plot_loss_curve(train_losses: list[float], val_losses: list[float], out_path
     plt.title("Loss por epoch")
     plt.savefig(out_path)
     plt.close()
+
+
+def plot_prediction_error(model: TTFModel, loader: DataLoader, out_path: Path) -> None:
+    model.eval()
+    preds: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+    with torch.no_grad():
+        for categorical, numeric, target in loader:
+            preds.append(model(categorical, numeric))
+            targets.append(target)
+
+    pred_arr: np.ndarray = torch.cat(preds).numpy()
+    target_arr: np.ndarray = torch.cat(targets).numpy()
+    relative_error: np.ndarray = np.abs(pred_arr - target_arr) / np.clip(target_arr, 1e-6, None) * 100
+
+    fig, (ax_scatter, ax_hist) = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    ax_scatter.scatter(target_arr, pred_arr, alpha=0.4, s=12)
+    lims: list[float] = [0, max(target_arr.max(), pred_arr.max())]
+    ax_scatter.plot(lims, lims, "r--", label="previsão ideal")
+    ax_scatter.set_xlabel("meses reais até falha")
+    ax_scatter.set_ylabel("meses previstos")
+    ax_scatter.set_title("Previsto vs real")
+    ax_scatter.legend()
+
+    ax_hist.hist(relative_error, bins=30)
+    ax_hist.set_xlabel("erro relativo (%)")
+    ax_hist.set_ylabel("contagem")
+    ax_hist.set_title("Distribuição do erro relativo")
+
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+RANGE_BINS: list[float] = [0, 6, 12, 24, 48, float("inf")]
+RANGE_LABELS: list[str] = ["0-6", "6-12", "12-24", "24-48", "48+"]
+
+
+def plot_error_by_range(model: TTFModel, loader: DataLoader, out_path: Path) -> None:
+    model.eval()
+    preds: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+    with torch.no_grad():
+        for categorical, numeric, target in loader:
+            preds.append(model(categorical, numeric))
+            targets.append(target)
+
+    pred_arr: np.ndarray = torch.cat(preds).numpy()
+    target_arr: np.ndarray = torch.cat(targets).numpy()
+    abs_error: np.ndarray = np.abs(pred_arr - target_arr)
+    relative_error: np.ndarray = abs_error / np.clip(target_arr, 1e-6, None) * 100
+
+    bucket_idx: np.ndarray = np.digitize(target_arr, RANGE_BINS[1:-1])
+
+    mae_per_bucket: list[float] = []
+    mape_per_bucket: list[float] = []
+    counts: list[int] = []
+    for i in range(len(RANGE_LABELS)):
+        mask: np.ndarray = bucket_idx == i
+        counts.append(int(mask.sum()))
+        mae_per_bucket.append(float(abs_error[mask].mean()) if mask.any() else 0.0)
+        mape_per_bucket.append(float(relative_error[mask].mean()) if mask.any() else 0.0)
+
+    fig, (ax_mae, ax_mape) = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    x = np.arange(len(RANGE_LABELS))
+    ax_mae.bar(x, mae_per_bucket)
+    ax_mae.set_xticks(x, [f"{lbl}\n(n={n})" for lbl, n in zip(RANGE_LABELS, counts)])
+    ax_mae.set_xlabel("faixa do tempo real até falha (meses)")
+    ax_mae.set_ylabel("erro absoluto médio (meses)")
+    ax_mae.set_title("Erro absoluto por faixa")
+
+    ax_mape.bar(x, mape_per_bucket, color="orange")
+    ax_mape.set_xticks(x, [f"{lbl}\n(n={n})" for lbl, n in zip(RANGE_LABELS, counts)])
+    ax_mape.set_xlabel("faixa do tempo real até falha (meses)")
+    ax_mape.set_ylabel("erro relativo médio (%)")
+    ax_mape.set_title("Erro relativo por faixa")
+
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
 
 
 def plot_embeddings(model: TTFModel, encoder: FeatureEncoder, col: str, out_path: Path) -> None:
@@ -180,6 +265,7 @@ def main() -> None:
             f"{label} -> MAE: {metrics['mae']:.2f} meses | "
             f"RMSE: {metrics['rmse']:.2f} | "
             f"acurácia (±{TOLERANCE_MONTHS:.0f} meses): {metrics['accuracy'] * 100:.1f}% | "
+            f"MAPE: {metrics['mape']:.1f}% | "
             f"{percentiles}"
         )
 
@@ -191,6 +277,8 @@ def main() -> None:
     torch.save(model.state_dict(), checkpoint_path)
 
     plot_loss_curve(train_losses, val_losses, checkpoint_path.parent / "loss_curve.png")
+    plot_prediction_error(model, val_loader, checkpoint_path.parent / "prediction_error.png")
+    plot_error_by_range(model, val_loader, checkpoint_path.parent / "error_by_range.png")
     plot_embeddings(model, encoder, "manufacturer", checkpoint_path.parent / "embedding_manufacturer.png")
     plot_embeddings(model, encoder, "category", checkpoint_path.parent / "embedding_category.png")
 

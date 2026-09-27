@@ -3,7 +3,9 @@ import os
 from typing import Any
 
 from mcp.server import MCPServer
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from src.data.features import UNK_TOKEN
 from src.serving.inference import TTFPredictor
@@ -72,23 +74,7 @@ def predict_time_to_failure_batch(requests: list[dict[str, Any]]) -> list[float 
         PredictionError `{"error": "..."}` for the items that failed
         validation.
     """
-    records: dict[int, dict[str, Any]] = {}
-    results: list[float | PredictionError] = [PredictionError(error="not processed") for _ in requests]
-
-    for i, raw in enumerate(requests):
-        try:
-            validated: PredictionRequest = PredictionRequest.model_validate(raw)
-        except ValidationError as exc:
-            results[i] = PredictionError(error=str(exc))
-            continue
-        records[i] = validated.model_dump(mode="json")
-
-    if records:
-        predictions: list[float] = predictor.predict_batch(list(records.values()))
-        for i, prediction in zip(records.keys(), predictions):
-            results[i] = prediction
-
-    return results
+    return predictor.predict_batch_validated(requests)
 
 
 @mcp.tool()
@@ -127,6 +113,35 @@ def list_valid_climate_zones() -> list[str]:
         should fetch it at runtime rather than hardcoding a copy.
     """
     return sorted(v for v in predictor.encoder.vocabs["climateZone"] if v != UNK_TOKEN)
+
+
+class PredictBatchRequest(BaseModel):
+    devices: list[dict[str, Any]] = Field(min_length=1, max_length=500)
+
+
+@mcp.custom_route("/predict-batch", methods=["POST"])
+async def predict_batch_http(request: Request) -> Response:
+    """Plain HTTP counterpart of predict_time_to_failure_batch, for internal
+    callers that aren't an LLM agent deciding at runtime whether to call this
+    (e.g. a scheduled job scanning the whole inventory). MCP's tool-call
+    envelope (structuredContent, content[], protocol version) is meant for
+    agent clients and is free to change with the MCP spec; a deterministic
+    caller shouldn't have to track that. Same process/port as the MCP
+    server, same predictor instance -- this is routing, not a second
+    service."""
+    try:
+        body = PredictBatchRequest.model_validate(await request.json())
+    except ValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    raw_results = predictor.predict_batch_validated(body.devices)
+    results = [
+        {"estimated_remaining_months": None, "error": r.error}
+        if isinstance(r, PredictionError)
+        else {"estimated_remaining_months": r, "error": None}
+        for r in raw_results
+    ]
+    return JSONResponse({"results": results})
 
 
 if __name__ == "__main__":
