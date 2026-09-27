@@ -3,10 +3,12 @@ from typing import Any
 
 import torch
 import yaml
+from pydantic import ValidationError
 
 from src.data.features import CATEGORICAL_COLUMNS, EncodedRecord, FeatureEncoder
 from src.data.schema import DeviceRecord
 from src.models.ttf_model import TTFModel
+from src.serving.schema import PredictionError, PredictionRequest
 
 CONFIG_PATH: Path = Path(__file__).parent.parent / "training" / "config.yaml"
 
@@ -50,3 +52,27 @@ class TTFPredictor:
             predictions: torch.Tensor = self.model(categorical, numeric)
 
         return predictions.tolist()
+
+    def predict_batch_validated(self, requests: list[dict[str, Any]]) -> list[float | PredictionError]:
+        """Same as predict_batch, but validates each item independently
+        first: an invalid item (missing/mistyped field) becomes a
+        PredictionError at its position instead of failing the whole call.
+        Shared by the MCP tool and the REST endpoint so validation stays
+        in one place."""
+        records: dict[int, dict[str, Any]] = {}
+        results: list[float | PredictionError] = [PredictionError(error="not processed") for _ in requests]
+
+        for i, raw in enumerate(requests):
+            try:
+                validated: PredictionRequest = PredictionRequest.model_validate(raw)
+            except ValidationError as exc:
+                results[i] = PredictionError(error=str(exc))
+                continue
+            records[i] = validated.model_dump(mode="json")
+
+        if records:
+            predictions: list[float] = self.predict_batch(list(records.values()))
+            for i, prediction in zip(records.keys(), predictions):
+                results[i] = prediction
+
+        return results
