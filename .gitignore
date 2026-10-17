@@ -19,3 +19,8 @@ data/processed/*
 CONTEXT.md
 .claude/
 scripts/
+CLAUDE.md
+.mcp.json
+.serena/
+# Added by code-review-graph
+.code-review-graph/
