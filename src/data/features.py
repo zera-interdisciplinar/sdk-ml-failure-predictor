@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -8,6 +9,7 @@ CATEGORICAL_COLUMNS: list[str] = ["category", "manufacturer", "model", "climateZ
 NUMERIC_COLUMNS: list[str] = ["usageIntensity", "ageAtAcquisitionMonths"]
 
 UNK_TOKEN: str = "<UNK>"
+DAYS_PER_MONTH: float = 30.44
 
 
 class EncodedRecord(TypedDict):
@@ -21,8 +23,17 @@ class EncoderState(TypedDict):
     numeric_std: dict[str, float]
 
 
+def months_since_manufacturing_year(acquired_at: date, manufacturing_year: int) -> float:
+    """Months from 1 January of the manufacturing year to the acquisition date.
+
+    manufacturingDate is a year, not a day. Counting only the year delta
+    collapses January and December of the same year onto the same age."""
+    origin = date(manufacturing_year, 1, 1)
+    return max((acquired_at - origin).days / DAYS_PER_MONTH, 0.0)
+
+
 def age_at_acquisition_months(record: DeviceRecord) -> float:
-    return max((record.acquiredAt.year - record.manufacturingDate) * 12, 0)
+    return months_since_manufacturing_year(record.acquiredAt, record.manufacturingDate)
 
 
 def target_months(record: DeviceRecord) -> float:
@@ -30,7 +41,7 @@ def target_months(record: DeviceRecord) -> float:
         return record.mesesAteQuebra
     if record.actualBreakDate is not None:
         delta_days = (record.actualBreakDate - record.acquiredAt).days
-        return delta_days / 30.44
+        return delta_days / DAYS_PER_MONTH
     raise ValueError("record has neither mesesAteQuebra nor actualBreakDate to derive the target")
 
 

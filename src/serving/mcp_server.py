@@ -1,3 +1,4 @@
+import json
 import os
 
 from typing import Any
@@ -130,7 +131,11 @@ async def predict_batch_http(request: Request) -> Response:
     server, same predictor instance -- this is routing, not a second
     service."""
     try:
-        body = PredictBatchRequest.model_validate(await request.json())
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "invalid JSON"}, status_code=422)
+    try:
+        body = PredictBatchRequest.model_validate(payload)
     except ValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
 

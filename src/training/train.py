@@ -1,3 +1,5 @@
+import hashlib
+import json
 import random
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,13 @@ from src.data.schema import DeviceRecord
 from src.models.ttf_model import TTFModel
 
 CONFIG_PATH: Path = Path(__file__).parent / "config.yaml"
+ROOT: Path = Path(__file__).resolve().parents[2]
 TOLERANCE_MONTHS: float = 3.0
+
+
+def resolve(path: str) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else ROOT / candidate
 
 
 def split_records(
@@ -28,11 +36,26 @@ def split_records(
     return shuffled[val_size:], shuffled[:val_size]
 
 
+def split_model_holdout(
+    records: list[DeviceRecord], holdout: float, seed: int
+) -> tuple[list[DeviceRecord], list[DeviceRecord]]:
+    """Holds out whole model names so the unseen-model metric is not just
+    new rows of a name the embedding already trained on."""
+    names: list[str] = sorted({record.model for record in records})
+    shuffled_names: list[str] = names.copy()
+    random.Random(seed).shuffle(shuffled_names)
+    held: set[str] = set(shuffled_names[: int(len(shuffled_names) * holdout)])
+    seen: list[DeviceRecord] = [record for record in records if record.model not in held]
+    unseen: list[DeviceRecord] = [record for record in records if record.model in held]
+    return seen, unseen
+
+
 def run_epoch(
     model: TTFModel,
     loader: DataLoader,
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
+    unk_mask_prob: float = 0.0,
 ) -> float:
     is_training: bool = optimizer is not None
     model.train(is_training)
@@ -44,6 +67,9 @@ def run_epoch(
             numeric: torch.Tensor
             target: torch.Tensor
             categorical, numeric, target = batch
+            if is_training and unk_mask_prob > 0:
+                drop: torch.Tensor = torch.rand(categorical.shape) < unk_mask_prob
+                categorical = categorical.masked_fill(drop, 0)
 
             pred: torch.Tensor = model(categorical, numeric)
             loss: torch.Tensor = criterion(pred, target)
@@ -211,29 +237,46 @@ def plot_embeddings(model: TTFModel, encoder: FeatureEncoder, col: str, out_path
     plt.close()
 
 
+def format_metrics(label: str, metrics: dict[str, float]) -> str:
+    percentiles: str = " | ".join(
+        f"p{int(p * 100)}: {metrics[f'p{int(p * 100)}']:.2f}" for p in PERCENTILES
+    )
+    return (
+        f"{label} -> MAE: {metrics['mae']:.2f} meses | "
+        f"RMSE: {metrics['rmse']:.2f} | "
+        f"acurácia (±{TOLERANCE_MONTHS:.0f} meses): {metrics['accuracy'] * 100:.1f}% | "
+        f"MAPE: {metrics['mape']:.1f}% | "
+        f"{percentiles}"
+    )
+
+
 def main() -> None:
     config: dict[str, Any] = yaml.safe_load(CONFIG_PATH.read_text())
+    seed: int = config["data"]["seed"]
+    torch.manual_seed(seed)
 
-    records: list[DeviceRecord] = load_records(config["data"]["raw_path"])
-    train_records: list[DeviceRecord]
-    val_records: list[DeviceRecord]
-    train_records, val_records = split_records(
-        records, config["data"]["val_split"], config["data"]["seed"]
-    )
+    records: list[DeviceRecord] = load_records(resolve(config["data"]["raw_path"]))
+    seen_records, unseen_records = split_model_holdout(records, config["data"]["model_holdout"], seed)
+    train_records, val_records = split_records(seen_records, config["data"]["val_split"], seed)
 
+    bundle_dir: Path = resolve(config["model"]["bundle_dir"])
+    bundle_dir.mkdir(parents=True, exist_ok=True)
     encoder: FeatureEncoder = FeatureEncoder()
     encoder.fit(train_records)
-    encoder.save(config["data"]["encoder_path"])
+    encoder_path: Path = bundle_dir / "feature_encoder.json"
+    encoder.save(encoder_path)
 
+    batch_size: int = config["training"]["batch_size"]
+    loader_gen: torch.Generator = torch.Generator()
+    loader_gen.manual_seed(seed)
     train_loader: DataLoader = DataLoader(
         DeviceDataset(train_records, encoder),
-        batch_size=config["training"]["batch_size"],
+        batch_size=batch_size,
         shuffle=True,
+        generator=loader_gen,
     )
-    val_loader: DataLoader = DataLoader(
-        DeviceDataset(val_records, encoder),
-        batch_size=config["training"]["batch_size"],
-    )
+    val_loader: DataLoader = DataLoader(DeviceDataset(val_records, encoder), batch_size=batch_size)
+    unseen_loader: DataLoader = DataLoader(DeviceDataset(unseen_records, encoder), batch_size=batch_size)
 
     vocab_sizes: dict[str, int] = {col: encoder.vocab_size(col) for col in CATEGORICAL_COLUMNS}
     model: TTFModel = TTFModel(
@@ -244,43 +287,70 @@ def main() -> None:
 
     criterion: nn.Module = nn.MSELoss()
     optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
+    unk_mask_prob: float = config["training"]["unk_mask_prob"]
 
     train_losses: list[float] = []
     val_losses: list[float] = []
+    best_val: float = float("inf")
+    best_epoch: int = 0
+    best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, config["training"]["epochs"] + 1):
-        train_loss: float = run_epoch(model, train_loader, criterion, optimizer)
+        train_loss: float = run_epoch(model, train_loader, criterion, optimizer, unk_mask_prob)
         val_loss: float = run_epoch(model, val_loader, criterion)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+        if val_loss < best_val:
+            best_val = val_loss
+            best_epoch = epoch
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
         print(f"epoch {epoch:03d} | treino: {train_loss:.2f} | validação: {val_loss:.2f}")
+
+    if best_state is None:
+        raise RuntimeError("training produced no checkpoint")
+    model.load_state_dict(best_state)
 
     train_metrics: dict[str, float] = compute_metrics(model, train_loader, TOLERANCE_MONTHS)
     val_metrics: dict[str, float] = compute_metrics(model, val_loader, TOLERANCE_MONTHS)
-
-    def format_metrics(label: str, metrics: dict[str, float]) -> str:
-        percentiles: str = " | ".join(
-            f"p{int(p * 100)}: {metrics[f'p{int(p * 100)}']:.2f}" for p in PERCENTILES
-        )
-        return (
-            f"{label} -> MAE: {metrics['mae']:.2f} meses | "
-            f"RMSE: {metrics['rmse']:.2f} | "
-            f"acurácia (±{TOLERANCE_MONTHS:.0f} meses): {metrics['accuracy'] * 100:.1f}% | "
-            f"MAPE: {metrics['mape']:.1f}% | "
-            f"{percentiles}"
-        )
+    unseen_metrics: dict[str, float] = compute_metrics(model, unseen_loader, TOLERANCE_MONTHS)
 
     print(format_metrics("treino    ", train_metrics))
     print(format_metrics("validação ", val_metrics))
+    print(format_metrics("modelo novo", unseen_metrics))
+    print(f"melhor epoch: {best_epoch} | MSE validação: {best_val:.2f}")
 
-    checkpoint_path: Path = Path(config["model"]["checkpoint_path"])
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), checkpoint_path)
+    checkpoint_path: Path = bundle_dir / "ttf_model.pt"
+    torch.save(best_state, checkpoint_path)
+    digest: str = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    manifest: dict[str, Any] = {
+        "embedding_dims": config["model"]["embedding_dims"],
+        "hidden_layers": config["model"]["hidden_layers"],
+        "vocab_sizes": vocab_sizes,
+        "seed": seed,
+        "best_epoch": best_epoch,
+        "val_mae": val_metrics["mae"],
+        "val_rmse": val_metrics["rmse"],
+        "unseen_model_mae": unseen_metrics["mae"],
+        "unseen_model_rmse": unseen_metrics["rmse"],
+        "state_dict_sha256": digest,
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
-    plot_loss_curve(train_losses, val_losses, checkpoint_path.parent / "loss_curve.png")
-    plot_prediction_error(model, val_loader, checkpoint_path.parent / "prediction_error.png")
-    plot_error_by_range(model, val_loader, checkpoint_path.parent / "error_by_range.png")
-    plot_embeddings(model, encoder, "manufacturer", checkpoint_path.parent / "embedding_manufacturer.png")
-    plot_embeddings(model, encoder, "category", checkpoint_path.parent / "embedding_category.png")
+    report: str = "\n".join(
+        [
+            format_metrics("treino     ", train_metrics),
+            format_metrics("validação  ", val_metrics),
+            format_metrics("modelo novo", unseen_metrics),
+            f"melhor epoch: {best_epoch} | MSE validação: {best_val:.2f}",
+        ]
+    )
+    (ROOT / "checkpoints" / "data.txt").write_text(report + "\n")
+
+    plots: Path = ROOT / "checkpoints"
+    plot_loss_curve(train_losses, val_losses, plots / "loss_curve.png")
+    plot_prediction_error(model, val_loader, plots / "prediction_error.png")
+    plot_error_by_range(model, val_loader, plots / "error_by_range.png")
+    plot_embeddings(model, encoder, "manufacturer", plots / "embedding_manufacturer.png")
+    plot_embeddings(model, encoder, "category", plots / "embedding_category.png")
 
 
 if __name__ == "__main__":
