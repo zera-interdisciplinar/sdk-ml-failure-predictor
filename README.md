@@ -10,9 +10,6 @@ serve as ferramentas MCP e o `POST /predict-batch`, na porta 8000. É consumido 
 [`ms-inventory`](https://github.com/zera-interdisciplinar/ms-inventory) (atualização diária da data
 prevista de quebra de cada item) e pelo `ms-artificial-intelligence-core` (assistente, via MCP).
 
-> O prefixo `sdk` no nome é um erro de escrita: este repositório não é um SDK, é um serviço com
-> deploy próprio.
-
 ## Sumário
 
 - [Domínio](#domínio)
