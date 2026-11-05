@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: southamerica-east1-docker.pkg.dev
-  IMAGE: southamerica-east1-docker.pkg.dev/zera-512810/repo/ml-failure-predictor
+  IMAGE: southamerica-east1-docker.pkg.dev/zeratech-prod/repo/ml-failure-predictor
 
 jobs:
   deploy:
@@ -30,7 +30,8 @@ jobs:
       - uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: zera-cluster
-          location: southamerica-east1
+          location: southamerica-east1-a
+          use_dns_endpoint: true
 
       - name: Configure Docker
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
